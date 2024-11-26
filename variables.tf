@@ -44,62 +44,67 @@ variable "security_groups" {
   type        = list(string)
 }
 
-variable "volume_manager_name" {
-  description = "Manager Volume Name"
+variable "volume_master_name" {
+  description = "Master Volume Name"
   type        = string
 }
 
-variable "volume_manager_size" {
-  description = "Manager Volume Size"
+variable "volume_master_size" {
+  description = "Master Volume Size"
   type        = number
 }
 
-variable "volume_worker1_name" {
-  description = "Worker1 Volume Name"
+variable "volume_worker_name" {
+  description = "Worker Volume Name"
   type        = string
 }
 
-variable "volume_worker1_size" {
-  description = "Worker1 Volume Size"
+variable "volume_worker_size" {
+  description = "Worker Volume Size"
   type        = number
 }
 
-variable "volume_worker2_name" {
-  description = "Worker2 Volume Name"
+variable "volume_bastion_name" {
+  description = "Bastion Volume Name"
   type        = string
 }
 
-variable "volume_worker2_size" {
-  description = "Worker2 Volume Size"
+variable "volume_bastion_size" {
+  description = "Bastion Volume Size"
   type        = number
 }
 
-variable "manager_instance_name" {
-  description = "Manager Instance Name"
+variable "master_instance_name" {
+  description = "Master Instance Name"
   type        = string
 }
 
-variable "manager_flavor_name" {
-  description = "Manager Flavor Name"
+variable "master_flavor_name" {
+  description = "Master Flavor Name"
   type        = string
 }
 
-variable "worker1_instance_name" {
-  description = "Worker1 Instance Name"
+variable "worker_instance_name" {
+  description = "Worker Instance Name"
   type        = string
 }
 
-variable "worker1_flavor_name" {
-  description = "Worker1 Flavor Name"
+variable "worker_flavor_name" {
+  description = "Worker Flavor Name"
   type        = string
 }
 
-variable "worker2_instance_name" {
-  description = "Worker2 Instance Name"
+variable "bastion_instance_name" {
+  description = "Bastion Instance Name"
   type        = string
 }
 
-variable "worker2_flavor_name" {
-  description = "Worker2 Flavor Name"
+variable "bastion_flavor_name" {
+  description = "Bastion Flavor Name"
+  type        = string
+}
+
+variable "floating_ip_pool" {
+  description = "The pool from which to allocate floating IPs"
   type        = string
 }

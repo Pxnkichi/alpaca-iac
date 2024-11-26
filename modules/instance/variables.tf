@@ -28,3 +28,7 @@ variable "security_groups" {
   type        = list(string)
 }
 
+variable "floating_ip_pool" {
+  description = "OpenStack Floating IP Pool"
+  type        = string
+}

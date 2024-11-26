@@ -1,23 +1,23 @@
-output "manager_instance_id" {
-  value = module.instance_manager.instance_id
+output "master_instance_id" {
+  value = module.instance_master.instance_id
 }
 
-output "worker1_instance_id" {
-  value = module.instance_worker1.instance_id
+output "worker_instance_id" {
+  value = module.instance_worker.instance_id
 }
 
-output "worker2_instance_id" {
-  value = module.instance_worker2.instance_id
+output "bastion_instance_id" {
+  value = module.instance_bastion.instance_id
 }
 
-output "manager_floating_ip" {
-  value = "211.183.3.11"
+output "master_floating_ip" {
+  value = "10.10.0.10"
 }
 
-output "worker1_floating_ip" {
-  value = "211.183.3.12"
+output "worker_floating_ip" {
+  value = "10.10.0.20"
 }
 
-output "worker2_floating_ip" {
-  value = "211.183.3.13"
+output "bastion_floating_ip" {
+  value = "10.10.0.30"
 }
