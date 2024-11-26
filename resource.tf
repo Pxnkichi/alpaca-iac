@@ -22,7 +22,7 @@ resource "null_resource" "ansible_playbook" {
       INVENTORY_JSON="./scripts/hosts.json"
 
       # Ansible 플레이북 실행
-      ansible-playbook -i $INVENTORY_JSON playbook.yml
+      ansible-playbook -i $INVENTORY_JSON ./ansible/playbook.yml
     EOT
   }
 
@@ -33,3 +33,4 @@ resource "null_resource" "ansible_playbook" {
     openstack_compute_floatingip_associate_v2.floating_ip_bastion_assoc
   ]
 }
+
