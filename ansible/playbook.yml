@@ -1,6 +1,7 @@
 ---
-- name: Test SSH connectivity to instances
-  hosts: all
+- name: Install Docker on master and worker nodes
+  hosts: master:worker
+  become: yes
   vars:
     ansible_ssh_private_key_file: /root/.ssh/alpaca.pem
   tasks:
@@ -10,3 +11,66 @@
     - name: Show ping results
       debug:
         msg: "Ping successful to {{ inventory_hostname }}"
+
+    - name: Ensure /etc/resolv.conf contains Google DNS
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "{{ item }}"
+        state: present
+      loop:
+        - "nameserver 8.8.8.8"
+        - "nameserver 8.8.4.4"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_cache_update
+      failed_when: apt_cache_update.failed
+      ignore_errors: yes
+
+    - name: Show apt cache update result
+      debug:
+        var: apt_cache_update
+
+    - name: Install required packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - software-properties-common
+
+    - name: Get Ubuntu release name
+      command: lsb_release -cs
+      register: release_name
+
+    - name: Show Ubuntu release name
+      debug:
+        var: release_name.stdout
+
+    - name: Add Docker repository
+      copy:
+        content: |
+          deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ release_name.stdout }} stable
+        dest: /etc/apt/sources.list.d/docker.list
+
+    - name: Update apt cache after adding Docker repository
+      apt:
+        update_cache: yes
+
+    - name: Install Docker packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+
+    - name: Enable and start Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
