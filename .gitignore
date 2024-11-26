@@ -1,0 +1,25 @@
+# Terraform 상태 파일
+*.tfstate
+*.tfstate.backup
+terraform.tfvars.lock
+
+# 디렉토리에서 생성된 Terraform 작업 파일
+.terraform/
+.terraform.lock.hcl
+
+# 출력 디렉토리
+tf-output/
+
+# 민감한 환경 변수 파일
+*.tfvars
+
+# 로그 및 임시 파일
+*.log
+*.tmp
+*.bak
+.DS_Store
+
+# IDE 및 OS별 불필요 파일
+.vscode/
+.idea/
+Thumbs.db
