@@ -23,3 +23,6 @@ tf-output/
 .vscode/
 .idea/
 Thumbs.db
+
+# keystone 인증
+scripts/openrc.sh
