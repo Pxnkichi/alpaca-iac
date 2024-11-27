@@ -1,5 +1,5 @@
 ---
-- name: Install Docker on master and worker nodes
+- name: Install Kubernetes compatible Docker on master and worker nodes
   hosts: master:worker
   become: yes
   vars:
@@ -24,13 +24,6 @@
     - name: Update apt cache
       apt:
         update_cache: yes
-      register: apt_cache_update
-      failed_when: apt_cache_update.failed
-      ignore_errors: yes
-
-    - name: Show apt cache update result
-      debug:
-        var: apt_cache_update
 
     - name: Install required packages
       apt:
@@ -41,26 +34,29 @@
         - ca-certificates
         - curl
         - software-properties-common
+        - gnupg
+
+    - name: Add Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/docker-archive-keyring.gpg
 
     - name: Get Ubuntu release name
       command: lsb_release -cs
       register: release_name
 
-    - name: Show Ubuntu release name
-      debug:
-        var: release_name.stdout
-
     - name: Add Docker repository
-      copy:
-        content: |
-          deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ release_name.stdout }} stable
-        dest: /etc/apt/sources.list.d/docker.list
+      shell: |
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu {{ release_name.stdout }} stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
 
     - name: Update apt cache after adding Docker repository
       apt:
         update_cache: yes
 
-    - name: Install Docker packages
+    - name: Install Kubernetes-compatible Docker packages
       apt:
         name: "{{ item }}"
         state: present
@@ -74,3 +70,21 @@
         name: docker
         state: started
         enabled: yes
+
+    - name: Configure Docker for Kubernetes
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2"
+          }
+
+    - name: Restart Docker to apply changes
+      service:
+        name: docker
+        state: restarted

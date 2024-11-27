@@ -1,0 +1,168 @@
+- name: Kubernetes Cluster Setup
+  hosts: all
+  become: yes
+  tasks:
+    - name: Show ping results
+      debug:
+        msg: "Ping successful to {{ inventory_hostname }}"
+
+    - name: Ensure /etc/resolv.conf contains Google DNS
+      lineinfile:
+        path: /etc/resolv.conf
+        line: "{{ item }}"
+        state: present
+      loop:
+        - "nameserver 8.8.8.8"
+        - "nameserver 8.8.4.4"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - curl
+          - git
+          - wget
+          - vim
+          - ssh
+        state: present
+        update_cache: yes
+
+    - name: Disable and stop ufw
+      systemd:
+        name: ufw
+        enabled: false
+        state: stopped
+
+    - name: Enable SSH
+      systemd:
+        name: ssh
+        enabled: true
+        state: started
+
+    - name: Set default to multi-user.target
+      command: systemctl set-default multi-user.target
+
+    - name: Install Docker
+      shell: |
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        chmod +x get-docker.sh
+        ./get-docker.sh
+      args:
+        creates: /usr/bin/docker
+
+    - name: Enable Docker
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Add user to Docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    - name: Configure Docker daemon
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2"
+          }
+      notify:
+        - Restart Docker
+
+    - name: Disable swap
+      shell: swapoff -a
+
+    - name: Ensure swap is commented in fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^/swapfile'
+        state: absent
+
+    - name: Install CRI-Docker
+      shell: |
+        VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest|grep tag_name | cut -d '"' -f 4|sed 's/v//g')
+        wget https://github.com/Mirantis/cri-dockerd/releases/download/v${VER}/cri-dockerd-${VER}.amd64.tgz
+        tar xvf cri-dockerd-${VER}.amd64.tgz
+        sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
+        wget https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.service
+        wget https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.socket
+        sudo mv cri-docker.socket cri-docker.service /etc/systemd/system/
+        sudo sed -i -e 's,/usr/bin/cri-dockerd,/usr/local/bin/cri-dockerd,' /etc/systemd/system/cri-docker.service
+        sudo systemctl daemon-reload
+        sudo systemctl enable cri-docker.service
+        sudo systemctl enable --now cri-docker.socket
+      args:
+        creates: /usr/local/bin/cri-dockerd
+
+    - name: Load kernel modules
+      shell: |
+        modprobe overlay
+        modprobe br_netfilter
+      become: true
+
+    - name: Configure sysctl
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+      notify:
+        - Apply sysctl
+
+    - name: Install Kubernetes packages
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+        apt-get update && apt-get install -y kubelet kubeadm kubectl
+        apt-mark hold kubelet kubeadm kubectl
+      args:
+        creates: /usr/bin/kubeadm
+
+- name: Configure Kubernetes Master
+  hosts: master
+  become: yes
+  tasks:
+    - name: Fix Cgroup Driver in Kubelet Configuration
+      lineinfile:
+        path: /var/lib/kubelet/config.yaml
+        regexp: '^cgroupDriver:'
+        line: 'cgroupDriver: systemd'
+
+    - name: Restart Kubelet
+      systemd:
+        name: kubelet
+        state: restarted
+
+    - name: Run kubeadm init with fixed CRI socket
+      shell: kubeadm init --cri-socket unix:///var/run/cri-dockerd.sock
+      register: init_output
+
+    - name: Save kubeconfig
+      copy:
+        dest: /root/.kube/config
+        content: "{{ lookup('file', '/etc/kubernetes/admin.conf') }}"
+
+    - name: Install Calico network plugin
+      shell: |
+        curl https://raw.githubusercontent.com/projectcalico/calico/v3.27.1/manifests/calico.yaml -O
+        kubectl apply -f calico.yaml
+
+- name: Configure Kubernetes Nodes
+  hosts: nodes
+  become: yes
+  tasks:
+    - name: Join Kubernetes cluster
+      shell: "{{ hostvars['master']['init_output']['stdout_lines'] | join('\n') | regex_search('kubeadm join.*') }} --cri-socket /var/run/cri-dockerd.sock"
+
