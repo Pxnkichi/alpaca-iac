@@ -64,13 +64,13 @@ variable "volume_worker_size" {
   type        = number
 }
 
-variable "volume_bastion_name" {
-  description = "Bastion Volume Name"
+variable "volume_jenkins_name" {
+  description = "Jenkins Volume Name"
   type        = string
 }
 
-variable "volume_bastion_size" {
-  description = "Bastion Volume Size"
+variable "volume_jenkins_size" {
+  description = "Jenkins Volume Size"
   type        = number
 }
 
@@ -94,17 +94,38 @@ variable "worker_flavor_name" {
   type        = string
 }
 
-variable "bastion_instance_name" {
-  description = "Bastion Instance Name"
+variable "jenkins_instance_name" {
+  description = "Jenkins Instance Name"
   type        = string
 }
 
-variable "bastion_flavor_name" {
-  description = "Bastion Flavor Name"
+variable "jenkins_flavor_name" {
+  description = "Jenkins Flavor Name"
   type        = string
 }
 
 variable "floating_ip_pool" {
   description = "The pool from which to allocate floating IPs"
   type        = string
+}
+
+# 추가: Harbor 관련 변수
+variable "harbor_instance_name" {
+  description = "Harbor Instance Name"
+  type        = string
+}
+
+variable "harbor_flavor_name" {
+  description = "Harbor Flavor Name"
+  type        = string
+}
+
+variable "volume_harbor_name" {
+  description = "Harbor Volume Name"
+  type        = string
+}
+
+variable "volume_harbor_size" {
+  description = "Harbor Volume Size (in GB)"
+  type        = number
 }

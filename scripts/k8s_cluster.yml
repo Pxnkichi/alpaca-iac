@@ -2,22 +2,18 @@
   hosts: all
   become: yes
   tasks:
-    - name: Show ping results
-      debug:
-        msg: "Ping successful to {{ inventory_hostname }}"
-
-    - name: Ensure /etc/resolv.conf contains Google DNS
+    - name: Set DNS to 8.8.8.8
       lineinfile:
         path: /etc/resolv.conf
-        line: "{{ item }}"
+        regexp: '^nameserver'
+        line: 'nameserver 8.8.8.8'
         state: present
-      loop:
-        - "nameserver 8.8.8.8"
-        - "nameserver 8.8.4.4"
 
-    - name: Update apt cache
-      apt:
-        update_cache: yes
+    - name: Ensure /etc/hosts contains hostname mapping
+      lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.1 {{ ansible_hostname }}"
+        state: present
 
     - name: Install prerequisites
       apt:
@@ -89,14 +85,20 @@
         regexp: '^/swapfile'
         state: absent
 
+    - name: Check internet connectivity
+      shell: ping -c 3 github.com
+      register: ping_output
+      failed_when: "'0 received' in ping_output.stdout"
+
     - name: Install CRI-Docker
       shell: |
-        VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest|grep tag_name | cut -d '"' -f 4|sed 's/v//g')
-        wget https://github.com/Mirantis/cri-dockerd/releases/download/v${VER}/cri-dockerd-${VER}.amd64.tgz
+        set -e
+        VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//g')
+        wget --tries=3 https://github.com/Mirantis/cri-dockerd/releases/download/v${VER}/cri-dockerd-${VER}.amd64.tgz
         tar xvf cri-dockerd-${VER}.amd64.tgz
         sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
-        wget https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.service
-        wget https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.socket
+        wget --tries=3 https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.service
+        wget --tries=3 https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.socket
         sudo mv cri-docker.socket cri-docker.service /etc/systemd/system/
         sudo sed -i -e 's,/usr/bin/cri-dockerd,/usr/local/bin/cri-dockerd,' /etc/systemd/system/cri-docker.service
         sudo systemctl daemon-reload
@@ -130,39 +132,172 @@
       args:
         creates: /usr/bin/kubeadm
 
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: Apply sysctl
+      shell: sysctl --system
+
 - name: Configure Kubernetes Master
   hosts: master
   become: yes
   tasks:
+    - name: Check if the user is root
+      shell: |
+        if [ "$(id -u)" -ne 0 ]; then
+          echo "User is not root. Exiting.";
+          exit 1;
+        fi
+
+    - name: Force stop processes using conflicting ports and files
+      shell: |
+        lsof -t -i :6443 -i :10259 -i :10257 -i :10250 -i :2379 -i :2380 | xargs -r kill -9 || true
+        umount -l /var/lib/kubelet/pods/* || true
+      ignore_errors: yes
+
+    - name: Reset Kubernetes cluster
+      shell: |
+        kubeadm reset -f --cri-socket unix:///var/run/cri-dockerd.sock
+        rm -rf /etc/cni/net.d || true
+        rm -rf ~/.kube || true
+        rm -rf /var/lib/kubelet/* || true
+        rm -rf /var/lib/etcd || true
+      ignore_errors: yes
+
+    - name: Pull Kubernetes images
+      shell: kubeadm config images pull --cri-socket unix:///var/run/cri-dockerd.sock
+      register: pull_output
+      failed_when: pull_output.rc != 0
+
+    - name: Run kubeadm init with fixed CRI socket
+      shell: |
+        kubeadm init --cri-socket unix:///var/run/cri-dockerd.sock | tee /tmp/kubeadm_init_output.txt
+      register: init_output
+      failed_when: init_output.rc != 0
+
+    - name: Extract join command
+      shell: |
+        grep -A 2 'kubeadm join' /tmp/kubeadm_init_output.txt | awk '{printf "%s ", $0}' > /tmp/join_command.sh
+      register: join_command_output
+      failed_when: join_command_output.rc != 0
+
+    - name: Debug extracted join command
+      shell: cat /tmp/join_command.sh
+      register: join_command_debug
+      changed_when: false
+
+    - name: Debug join command content
+      debug:
+        var: join_command_debug.stdout
+
+    - name: Save kubeconfig to master
+      shell: |
+        mkdir -p $HOME/.kube
+        cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        chown $(id -u):$(id -g) $HOME/.kube/config
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Wait for API server to be ready
+      shell: |
+        for i in {1..30}; do
+          kubectl cluster-info &> /dev/null && break
+          echo "Waiting for API server..."
+          sleep 5
+        done
+      register: api_server_ready
+      failed_when: api_server_ready.rc != 0
+
+    - name: Install Calico network plugin
+      shell: |
+        curl -s https://raw.githubusercontent.com/projectcalico/calico/v3.27.1/manifests/calico.yaml -O
+        kubectl apply --validate=false -f calico.yaml
+      register: calico_install_output
+      failed_when: "'error' in calico_install_output.stderr.lower()"
+
     - name: Fix Cgroup Driver in Kubelet Configuration
       lineinfile:
         path: /var/lib/kubelet/config.yaml
         regexp: '^cgroupDriver:'
         line: 'cgroupDriver: systemd'
+      notify:
+        - Restart Kubelet
 
     - name: Restart Kubelet
       systemd:
         name: kubelet
         state: restarted
 
-    - name: Run kubeadm init with fixed CRI socket
-      shell: kubeadm init --cri-socket unix:///var/run/cri-dockerd.sock
-      register: init_output
-
-    - name: Save kubeconfig
-      copy:
-        dest: /root/.kube/config
-        content: "{{ lookup('file', '/etc/kubernetes/admin.conf') }}"
-
-    - name: Install Calico network plugin
-      shell: |
-        curl https://raw.githubusercontent.com/projectcalico/calico/v3.27.1/manifests/calico.yaml -O
-        kubectl apply -f calico.yaml
+  handlers:
+    - name: Restart Kubelet
+      systemd:
+        name: kubelet
+        state: restarted
 
 - name: Configure Kubernetes Nodes
-  hosts: nodes
+  hosts: worker
   become: yes
   tasks:
-    - name: Join Kubernetes cluster
-      shell: "{{ hostvars['master']['init_output']['stdout_lines'] | join('\n') | regex_search('kubeadm join.*') }} --cri-socket /var/run/cri-dockerd.sock"
+    - name: Fetch join command from master
+      fetch:
+        src: /tmp/join_command.sh
+        dest: /tmp/join_command.sh
+        flat: yes
+      delegate_to: 10.10.0.10
+
+    - name: Transfer join command to worker
+      copy:
+        src: /tmp/join_command.sh
+        dest: /tmp/join_command.sh
+        mode: '0755'
+
+    - name: Append CRI socket option to join command
+      shell: echo " --cri-socket unix:///var/run/cri-dockerd.sock" >> /tmp/join_command.sh
+      delegate_to: 10.10.0.20
+
+    - name: Fix join command formatting
+      shell: |
+        sed -i 's/ \\//g; s/  */ /g' /tmp/join_command.sh
+      delegate_to: 10.10.0.20
+
+    - name: Ensure join command script is executable
+      shell: chmod +x /tmp/join_command.sh
+      delegate_to: 10.10.0.20
+
+    - name: Debug join command script content
+      shell: cat /tmp/join_command.sh
+      register: join_command_debug
+      delegate_to: 10.10.0.20
+      changed_when: false
+
+    - name: Debug join command output
+      debug:
+        var: join_command_debug.stdout
+
+    - name: Execute join command on worker as root
+      shell: |
+        sudo bash /tmp/join_command.sh
+      register: worker_join_output
+      failed_when: "'error' in worker_join_output.stderr.lower() or 'failure' in worker_join_output.stderr.lower()"
+      delegate_to: 10.10.0.20
+      ignore_errors: yes
+
+    - name: Debug worker join output
+      debug:
+        var: worker_join_output.stdout
+
+    - name: Wait for node to become Ready
+      shell: |
+        for i in {1..20}; do
+          kubectl get nodes | grep -q 'Ready' && break
+          echo "Waiting for worker node to become Ready..."
+          sleep 10
+        done
+      register: node_ready_check
+      failed_when: node_ready_check.rc != 0
+      changed_when: false
+      delegate_to: 10.10.0.10
 

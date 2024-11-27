@@ -9,9 +9,15 @@ resource "openstack_compute_floatingip_associate_v2" "floating_ip_worker_assoc" 
   instance_id = module.instance_worker.instance_id
 }
 
-resource "openstack_compute_floatingip_associate_v2" "floating_ip_bastion_assoc" {
+resource "openstack_compute_floatingip_associate_v2" "floating_ip_jenkins_assoc" {
+  floating_ip = "10.10.0.40"
+  instance_id = module.instance_jenkins.instance_id
+}
+
+
+resource "openstack_compute_floatingip_associate_v2" "floating_ip_harbor_assoc" {
   floating_ip = "10.10.0.30"
-  instance_id = module.instance_bastion.instance_id
+  instance_id = module.instance_harbor.instance_id
 }
 
 # Ansible 플레이북 실행 추가

@@ -12,12 +12,13 @@ module "volume_worker" {
   image_id    = var.image_id
 }
 
-module "volume_bastion" {
+module "volume_jenkins" {
   source      = "./modules/volume"
-  volume_name = var.volume_bastion_name
-  size        = var.volume_bastion_size
+  volume_name = var.volume_jenkins_name
+  size        = var.volume_jenkins_size
   image_id    = var.image_id
 }
+
 module "instance_master" {
   source           = "./modules/instance"
   instance_name    = var.master_instance_name
@@ -40,13 +41,33 @@ module "instance_worker" {
   floating_ip_pool = var.floating_ip_pool
 }
 
-module "instance_bastion" {
+module "instance_jenkins" {
   source           = "./modules/instance"
-  instance_name    = var.bastion_instance_name
-  flavor_name      = var.bastion_flavor_name
+  instance_name    = var.jenkins_instance_name
+  flavor_name      = var.jenkins_flavor_name
   key_pair_name    = var.key_pair_name
   network_id       = var.network_id
-  volume_id        = module.volume_bastion.volume_id
+  volume_id        = module.volume_jenkins.volume_id
+  security_groups  = var.security_groups
+  floating_ip_pool = var.floating_ip_pool
+}
+
+# Harbor 볼륨 생성
+module "volume_harbor" {
+  source      = "./modules/volume"
+  volume_name = var.volume_harbor_name
+  size        = var.volume_harbor_size
+  image_id    = var.image_id
+}
+
+# Harbor 인스턴스 생성
+module "instance_harbor" {
+  source           = "./modules/instance"
+  instance_name    = var.harbor_instance_name
+  flavor_name      = var.harbor_flavor_name
+  key_pair_name    = var.key_pair_name
+  network_id       = var.network_id
+  volume_id        = module.volume_harbor.volume_id
   security_groups  = var.security_groups
   floating_ip_pool = var.floating_ip_pool
 }
