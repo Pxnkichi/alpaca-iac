@@ -2,12 +2,46 @@
   hosts: all
   become: yes
   tasks:
-    - name: Set DNS to 8.8.8.8
-      lineinfile:
-        path: /etc/resolv.conf
-        regexp: '^nameserver'
-        line: 'nameserver 8.8.8.8'
-        state: present
+    - name: Check if resolv.conf is a symlink
+      command: stat /etc/resolv.conf
+      register: resolv_conf_status
+
+    - name: Fix resolv.conf symlink to stub-resolv.conf
+      shell: ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+      when: resolv_conf_status.stdout.find('symbolic link') == -1
+
+    - name: Set global DNS in systemd-resolved
+      blockinfile:
+        path: /etc/systemd/resolved.conf
+        block: |
+          [Resolve]
+          DNS=8.8.8.8 1.1.1.1
+          FallbackDNS=8.8.4.4
+      notify:
+        - Restart systemd-resolved
+
+    - name: Restart systemd-resolved to apply DNS changes
+      service:
+        name: systemd-resolved
+        state: restarted
+
+    - name: Verify resolv.conf content
+      command: cat /etc/resolv.conf
+      register: resolv_conf_content
+      changed_when: false
+
+    - name: Debug resolv.conf content
+      debug:
+        var: resolv_conf_content.stdout
+
+    - name: Verify DNS status with resolvectl
+      command: resolvectl status
+      register: dns_status
+      changed_when: false
+
+    - name: Debug DNS status
+      debug:
+        var: dns_status.stdout
 
     - name: Ensure /etc/hosts contains hostname mapping
       lineinfile:
@@ -23,6 +57,7 @@
           - wget
           - vim
           - ssh
+          - jq
         state: present
         update_cache: yes
 
@@ -92,20 +127,24 @@
 
     - name: Install CRI-Docker
       shell: |
-        set -e
-        VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//g')
-        wget --tries=3 https://github.com/Mirantis/cri-dockerd/releases/download/v${VER}/cri-dockerd-${VER}.amd64.tgz
-        tar xvf cri-dockerd-${VER}.amd64.tgz
-        sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
-        wget --tries=3 https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.service
-        wget --tries=3 https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.socket
-        sudo mv cri-docker.socket cri-docker.service /etc/systemd/system/
-        sudo sed -i -e 's,/usr/bin/cri-dockerd,/usr/local/bin/cri-dockerd,' /etc/systemd/system/cri-docker.service
-        sudo systemctl daemon-reload
-        sudo systemctl enable cri-docker.service
-        sudo systemctl enable --now cri-docker.socket
+       set -e
+       VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest | jq -r '.tag_name' | sed 's/v//g')
+       if [ ! -f cri-dockerd-${VER}.amd64.tgz ]; then
+         wget https://github.com/Mirantis/cri-dockerd/releases/download/v${VER}/cri-dockerd-${VER}.amd64.tgz
+       fi
+       tar xvf cri-dockerd-${VER}.amd64.tgz
+       sudo mv cri-dockerd/cri-dockerd /usr/local/bin/
+       wget --tries=3 https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.service
+       wget --tries=3 https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.socket
+       sudo mv cri-docker.socket cri-docker.service /etc/systemd/system/
+       sudo sed -i -e 's,/usr/bin/cri-dockerd,/usr/local/bin/cri-dockerd,' /etc/systemd/system/cri-docker.service
+       sudo systemctl daemon-reload
+       sudo systemctl enable cri-docker.service
+       sudo systemctl enable --now cri-docker.socket
       args:
         creates: /usr/local/bin/cri-dockerd
+      register: cri_docker_install_result
+      failed_when: cri_docker_install_result.rc != 0
 
     - name: Load kernel modules
       shell: |
@@ -140,6 +179,11 @@
 
     - name: Apply sysctl
       shell: sysctl --system
+
+    - name: Restart systemd-resolved
+      service:
+        name: systemd-resolved
+        state: restarted
 
 - name: Configure Kubernetes Master
   hosts: master
@@ -201,22 +245,45 @@
       args:
         creates: /etc/kubernetes/admin.conf
 
+    # Add admin.conf permission setup here
+    - name: Set permissions for /etc/kubernetes/admin.conf
+      file:
+        path: /etc/kubernetes/admin.conf
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+
+    - name: Set KUBECONFIG environment variable for ubuntu user
+      lineinfile:
+        path: /home/ubuntu/.bashrc
+        line: "export KUBECONFIG=/etc/kubernetes/admin.conf"
+        state: present
+
     - name: Wait for API server to be ready
       shell: |
-        for i in {1..30}; do
+        for i in {1..15}; do
           kubectl cluster-info &> /dev/null && break
-          echo "Waiting for API server..."
+          echo "Waiting for API server...";
           sleep 5
         done
       register: api_server_ready
       failed_when: api_server_ready.rc != 0
 
-    - name: Install Calico network plugin
-      shell: |
-        curl -s https://raw.githubusercontent.com/projectcalico/calico/v3.27.1/manifests/calico.yaml -O
-        kubectl apply --validate=false -f calico.yaml
-      register: calico_install_output
-      failed_when: "'error' in calico_install_output.stderr.lower()"
+    # Add Calico installation tasks here
+    - name: Download Calico YAML
+      shell: wget -O /tmp/calico.yaml https://raw.githubusercontent.com/projectcalico/calico/v3.27.1/manifests/calico.yaml
+      args:
+        creates: /tmp/calico.yaml
+
+    - name: Apply Calico YAML
+      shell: KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply --validate=false -f /tmp/calico.yaml
+      register: calico_apply_result
+      failed_when: "'error' in calico_apply_result.stderr.lower()"
+
+    - name: Verify pod status in kube-system namespace
+      shell: kubectl get pods -n kube-system
+      register: pod_status
+      failed_when: "'Pending' in pod_status.stdout or 'Error' in pod_status.stdout"
 
     - name: Fix Cgroup Driver in Kubelet Configuration
       lineinfile:
